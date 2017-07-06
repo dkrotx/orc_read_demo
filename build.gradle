@@ -1,0 +1,12 @@
+group = 'ru.mail.go'
+apply plugin: 'java'
+
+sourceCompatibility = 8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile 'org.apache.spark:spark-core_2.11:1.6.3'
+}
