@@ -16,15 +16,15 @@ import java.io.IOException;
 public class SampleFileWriter implements Closeable {
     private Writer writer;
     private VectorizedRowBatch batch;
+    private RecordSchema record_schema;
+
 
     SampleFileWriter(Configuration conf, Path path) throws IOException {
-        TypeDescription schema = TypeDescription.createStruct()
-                .addField("id", TypeDescription.createInt())
-                .addField("name", TypeDescription.createString())
-                .addField("phone", TypeDescription.createInt());
+        record_schema = new RecordSchema();
+        TypeDescription schema = record_schema.GetORCSchema();
 
         writer = OrcFile.createWriter(path, OrcFile.writerOptions(conf).
-                compress(CompressionKind.NONE).setSchema(schema));
+                compress(CompressionKind.NONE).stripeSize(256 * 1024).setSchema(schema));
         batch = schema.createRowBatch();
     }
 

@@ -1,0 +1,10 @@
+BUILD
+========================
+
+$ ./gradlew installApp
+
+RUN
+========================
+
+$ ./build/install/orc_read_demo/bin/write_sample.sh /tmp/sample.orc 2000
+$ ./run_demo.sh /tmp/sample.orc
