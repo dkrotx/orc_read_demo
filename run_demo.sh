@@ -13,4 +13,4 @@ collect_dep_jars() {
 DEP_JARS="$( collect_dep_jars )"
 
 exec spark-submit --jars $DEP_JARS --class DataFrameDemo --master local[4] \
-     ./build/libs/orc_read_demo.jar $1
+     ./build/libs/orc_read_demo.jar "$@"

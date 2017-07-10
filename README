@@ -1,10 +1,26 @@
 BUILD
 ========================
-
 $ ./gradlew installApp
+
+
+PREPARE
+=======================
+
+Если запустить без этого пункта, то вы получите jar-hell.
+Корявый, но рабочий фикс: правка .jar-ника spark-assembly.
+Для этого вы можете воспользоваться скриптом ./patch_spark_assembly.sh [path/to/yourr/spark-assembly.jar]
+
+
+TESTS
+========================
+$ ./gradlew test
+
 
 RUN
 ========================
+$ ./build/install/orc_read_demo/bin/write_sample.sh /tmp/sample.orc 10000000
+$ ./run_demo.sh /tmp/sample.orc 5821441 # look for specific ID
 
-$ ./build/install/orc_read_demo/bin/write_sample.sh /tmp/sample.orc 2000
-$ ./run_demo.sh /tmp/sample.orc
+Можно также проанализировать реальное зачитывание данных в spark-ом:
+$ vmtouch -v /tmp/sample.orc   # показать что было зачитано из файла в RAM
+$ vmtouch -e /tmp/sample.orc   # сбросить для чистоты эксперимента

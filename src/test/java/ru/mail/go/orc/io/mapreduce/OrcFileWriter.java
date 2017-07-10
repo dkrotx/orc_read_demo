@@ -1,3 +1,5 @@
+package ru.mail.go.orc.io.mapreduce;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -8,42 +10,44 @@ import org.apache.orc.CompressionKind;
 import org.apache.orc.OrcFile;
 import org.apache.orc.TypeDescription;
 import org.apache.orc.Writer;
-import ru.mail.go.orc.io.spark.OrcRecordSchema;
 
 import java.io.Closeable;
 import java.io.IOException;
 
-
-public class SampleFileWriter implements Closeable {
+class OrcFileWriter implements Closeable {
     private Writer writer;
     private VectorizedRowBatch batch;
-    private OrcRecordSchema record_schema;
+    Path path;
 
-
-    SampleFileWriter(Configuration conf, Path path) throws IOException {
-        record_schema = PhoneBookRecord.MakeOrcRecordSchema();
-        TypeDescription schema = record_schema.GetORCSchema();
+    private void CreateWriter(Configuration conf, Path path) throws IOException {
+        TypeDescription schema = TypeDescription.createStruct()
+                .addField("id", TypeDescription.createInt())
+                .addField("name", TypeDescription.createString())
+                .addField("phone", TypeDescription.createLong());
 
         writer = OrcFile.createWriter(path, OrcFile.writerOptions(conf).
-                compress(CompressionKind.NONE).setSchema(schema));
+                compress(CompressionKind.NONE).stripeSize(64 * 1024).setSchema(schema));
         batch = schema.createRowBatch();
     }
 
-    public static void main(String[] args) throws IOException {
-        Path path = new Path(args[0]);
+    public OrcFileWriter(String filename) {
+        path = new Path(filename);
+    }
+
+    public void Write(int n) throws IOException {
         Configuration conf = new Configuration();
         FileSystem fs = path.getFileSystem(conf);
-        int n = Integer.valueOf(args[1]);
 
         if (fs.exists(path))
             fs.delete(path, false);
 
-        SampleFileWriter wr = new SampleFileWriter(conf, path);
+        CreateWriter(conf, path);
+
         for (int i = 1; i <= n; i++) {
-            wr.Append(i, String.format("stub_instead_of_field_name_%d", i), i * 1000);
+            Append(i, String.format("Name_%d", i), i * 1000);
         }
 
-        wr.close();
+        close();
     }
 
     private void Append(int id, String name, long phone) throws IOException {
@@ -72,6 +76,14 @@ public class SampleFileWriter implements Closeable {
         if (batch.size != 0) {
             writer.addRowBatch(batch);
             batch.reset();
+        }
+    }
+
+    static void WriteDemoOrcFile(String filename, int nrecords) {
+        try {
+            new OrcFileWriter(filename).Write(nrecords);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 }

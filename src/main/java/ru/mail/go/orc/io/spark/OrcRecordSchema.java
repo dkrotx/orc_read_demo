@@ -1,3 +1,5 @@
+package ru.mail.go.orc.io.spark;
+
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Writable;
@@ -13,18 +15,38 @@ import org.apache.spark.sql.types.StructType;
 import java.util.ArrayList;
 import java.util.List;
 
-public class RecordSchema {
-    class field {
+public class OrcRecordSchema {
+    public static class Field {
         String name;
         DataType sql_type;
         TypeDescription orc_type;
         boolean nullable;
 
-        field(String name, DataType sql_type, TypeDescription orc_type, boolean nullable) {
+        private Field(String name, DataType sql_type, TypeDescription orc_type, boolean nullable) {
             this.name = name;
             this.sql_type = sql_type;
             this.orc_type = orc_type;
             this.nullable = nullable;
+        }
+
+        static private DataType getSQLDataTypeFor(TypeDescription orc_type) {
+            TypeDescription.Category cat = orc_type.getCategory();
+
+            switch(cat) {
+                case INT: return DataTypes.IntegerType;
+                case LONG: return DataTypes.LongType;
+                case STRING: return DataTypes.StringType;
+                default:
+                    throw new IllegalArgumentException("Unknown type " + cat.getName());
+            }
+        }
+
+        static public Field MakeField(String name, TypeDescription orc_type, boolean nullable) {
+            return new Field(name, getSQLDataTypeFor(orc_type), orc_type, nullable);
+        }
+
+        static public Field MakeField(String name, TypeDescription orc_type) {
+            return MakeField(name, orc_type, true);
         }
     }
 
@@ -46,18 +68,15 @@ public class RecordSchema {
         }
     }
 
-    ArrayList<field> fields;
+    private Field[] fields;
 
-    public RecordSchema() {
-        fields = new ArrayList<>();
-        fields.add(new field("id", DataTypes.IntegerType, TypeDescription.createInt(), true));
-        fields.add(new field("name", DataTypes.StringType, TypeDescription.createString(), true));
-        fields.add(new field("phone", DataTypes.LongType, TypeDescription.createLong(), true));
+    public OrcRecordSchema(Field[] fields) {
+        this.fields = fields;
     }
 
     public final TypeDescription GetORCSchema() {
         TypeDescription schema = TypeDescription.createStruct();
-        for (field desc: fields) {
+        for (Field desc: fields) {
             schema.addField(desc.name, desc.orc_type);
         }
 
@@ -66,7 +85,7 @@ public class RecordSchema {
 
     public final StructType GetSQLSchema() {
         ArrayList<StructField> sql_fields = new ArrayList<>();
-        for (field desc: fields) {
+        for (Field desc: fields) {
             sql_fields.add(DataTypes.createStructField(desc.name, desc.sql_type, desc.nullable));
         }
 
