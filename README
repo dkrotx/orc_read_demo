@@ -19,7 +19,7 @@ $ ./gradlew test
 RUN
 ========================
 $ ./build/install/orc_read_demo/bin/write_sample.sh /tmp/sample.orc 10000000
-$ ./run_demo.sh /tmp/sample.orc 5821441 # look for specific ID
+$ ./run_demo.sh /tmp/sample.orc 1960961 # look for specific ID
 
 Можно также проанализировать реальное зачитывание данных в spark-ом:
 $ vmtouch -v /tmp/sample.orc   # показать что было зачитано из файла в RAM
