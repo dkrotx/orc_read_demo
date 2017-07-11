@@ -26,13 +26,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.*;
 
 public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
     private static final Logger LOG = LoggerFactory.getLogger(OrcInputFormatNew.class);
+    private static final String ORC_INPUTFORMAT_OPTS = "orc.inputformat_new.opts";
 
+    /**
+     * Check whatever given stripe is satisfying filter predicate
+     *
+     * @param stripeStatistics stripe statistics (min/max is used)
+     * @param sarg             filter
+     * @param filterColumns    columns IDs for leaves of filter
+     * @param evolution        schema evolution for reading
+     * @return true if this stripe is candidate for filter
+     */
     static boolean isStripeSatisfyPredicate(
             StripeStatistics stripeStatistics, SearchArgument sarg, int[] filterColumns,
             final SchemaEvolution evolution) {
@@ -74,19 +86,109 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         return includeStripe;
     }
 
-    @Override
-    public List<InputSplit> getSplits(JobContext context) throws IOException {
-        Configuration conf = context.getConfiguration();
-        List<InputSplit> splits = new ArrayList<>();
-        SearchArgument sarg = extractSearchArgument(conf);
-
-        for (FileStatus status : listStatus(context)) {
-            splits.addAll(getSplitForFile(conf, status, sarg));
+    /**
+     * Set options controlling the way input splits created
+     *
+     * @param conf Hadoop configuration to serialize options to
+     * @param opts options itself
+     */
+    static public void setInputFormatOptions(Configuration conf, Options opts) {
+        try {
+            conf.set(ORC_INPUTFORMAT_OPTS, SerializationUtils.SerializeBase64(opts));
+        } catch (IOException e) {
+            throw new RuntimeException("setInputFormatOptions - no memory?");
         }
-
-        return splits;
     }
 
+    /**
+     * Retrieve saved input format options
+     *
+     * @param conf Hadoop configuration to deserialize options from
+     * @return options object
+     */
+    static public Options getInputFormatOptions(Configuration conf) {
+        String opts_str = conf.get(ORC_INPUTFORMAT_OPTS);
+
+        if (opts_str != null) {
+            try {
+                return (Options) SerializationUtils.DeserializeFromBase64(opts_str);
+            } catch (IOException | ClassNotFoundException e) {
+                throw new RuntimeException("getInputFormatOptions - bad string in conf?");
+            }
+        }
+
+        return Options.Make();
+    }
+
+    @Override
+    public List<InputSplit> getSplits(JobContext ctx) throws IOException {
+        Configuration conf = ctx.getConfiguration();
+        Options opts = getInputFormatOptions(conf);
+
+        try {
+            if (opts.read_meta) {
+                SearchArgument sarg = extractSearchArgument(conf);
+                return getSplitsParallel(conf, opts, sarg, listStatus(ctx));
+            }
+        } catch (InterruptedException e) {
+            LOG.error("Failed to get proper splits in parallel. Fallback to default approach");
+        }
+
+        return getDefaultSplits(ctx);
+    }
+
+    /**
+     * Get splits for given fileStatuses in parallel.
+     * It has significant boost because getting information from HDFS NameNode
+     * requires much time and produce network IO.
+     *
+     * @param conf         Hadoop configuration
+     * @param opts         options controlling how much parallel instances to fetch
+     * @param sarg         SearchArgument to filter only meaningful ORC-stripes
+     * @param fileStatuses ORC files to make splits for
+     * @return splits for meaningful stripes for each file
+     * @throws InterruptedException in case of some interruptions (method itself waits forever)
+     */
+    private List<InputSplit> getSplitsParallel(Configuration conf, Options opts, SearchArgument sarg,
+                                               List<FileStatus> fileStatuses) throws InterruptedException {
+        ArrayList<Callable<List<FileSplit>>> tasks = new ArrayList<>();
+        fileStatuses.forEach(st -> tasks.add(() -> getSplitForFile(conf, st, sarg)));
+
+        ExecutorService tpool = Executors.newFixedThreadPool(opts.split_builders_parallel);
+        List<Future<List<FileSplit>>> futures = tpool.invokeAll(tasks);
+
+        ArrayList<InputSplit> result = new ArrayList<>();
+
+        try {
+            for (Future<List<FileSplit>> f : futures)
+                result.addAll(f.get());
+        } catch (ExecutionException e) {
+            throw new InterruptedException("getSplitsParallel: actual split is not ready");
+        }
+
+        return result;
+    }
+
+    /**
+     * Return default (by HDFS block) splits for all given files
+     *
+     * @param ctx context of job
+     * @return split for every block of each file
+     * @throws IOException
+     */
+    private List<InputSplit> getDefaultSplits(JobContext ctx) throws IOException {
+        return super.getSplits(ctx);
+    }
+
+    /**
+     * Get split fo concrete file
+     *
+     * @param conf   Hadoop configuration
+     * @param status file status
+     * @param sarg   SearchArgument to filter only meaningful ORC-stripes
+     * @return list of input splits for meaningful stripes
+     * @throws IOException in case of HDFS problems
+     */
     private List<FileSplit> getSplitForFile(Configuration conf, FileStatus status, SearchArgument sarg) throws IOException {
         Path path = status.getPath();
         FileSystem fs = path.getFileSystem(conf);
@@ -102,23 +204,44 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         return splits;
     }
 
+    /**
+     * Print how much [blocks] we will skip for given file
+     *
+     * @param status ORC file
+     * @param splits built splits for this file
+     */
     private void printSkipStatistics(FileStatus status, List<FileSplit> splits) {
         long splits_len = summSplitsLen(splits);
         double percent = status.getLen() == 0 ? 0.0 :
-                (1.0 - (double)splits_len / status.getLen()) * 100.0;
+                (1.0 - (double) splits_len / status.getLen()) * 100.0;
 
         LOG.info(String.format("ORC: skipped %.1f%% percent for '%s'",
                 percent, status.getPath()));
     }
 
+    /**
+     * Get total length of splits
+     *
+     * @param splits built split for file
+     * @return sum
+     */
     private long summSplitsLen(List<FileSplit> splits) {
         long sum = 0;
-        for (FileSplit split: splits) {
+        for (FileSplit split : splits) {
             sum += split.getLength();
         }
         return sum;
     }
 
+    /**
+     * Calculate mask stripes matching specific filter
+     *
+     * @param schema      ORC file schema
+     * @param sarg        filter
+     * @param stripe_stat stripe statistics
+     * @param path        path to HDFS file
+     * @return mask-array where true means "this stripe matches filter"
+     */
     private boolean[] getIncludedStripes(TypeDescription schema,
                                          SearchArgument sarg, List<StripeStatistics> stripe_stat, Path path) {
         if (sarg != null) {
@@ -132,6 +255,12 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         return all_included;
     }
 
+    /**
+     * Extract (serialized) search argument from conf
+     *
+     * @param conf Hadoop configuration
+     * @return SearchArgument object
+     */
     private SearchArgument extractSearchArgument(Configuration conf) {
         String kryoSarg = OrcConf.KRYO_SARG.getString(conf);
 
@@ -142,6 +271,15 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         return null;
     }
 
+    /**
+     * create reader of ORC records (invokes on mappers-side)
+     *
+     * @param inputSplit         split
+     * @param taskAttemptContext task attemp context (from MapReduce framework)
+     * @return RecordReader which provides OrcStruct as values (no keys)
+     * @throws IOException
+     * @throws InterruptedException
+     */
     @Override
     public RecordReader<NullWritable, OrcStruct> createRecordReader(InputSplit inputSplit,
                                                                     TaskAttemptContext taskAttemptContext
@@ -149,6 +287,36 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         return super.createRecordReader(inputSplit, taskAttemptContext);
     }
 
+    /***
+     * Options for InputFormat controlling speed and resources
+     */
+    static public class Options implements Serializable {
+        private boolean read_meta;
+        private int split_builders_parallel;
+
+        public Options() {
+            read_meta = true;
+            split_builders_parallel = 32;
+        }
+
+        public static Options Make() {
+            return new Options();
+        }
+
+        public Options WithReadMeta(boolean read_meta) {
+            this.read_meta = read_meta;
+            return this;
+        }
+
+        public Options WithParallelSplitBuilders(int nparallel) {
+            this.split_builders_parallel = nparallel;
+            return this;
+        }
+    }
+
+    /**
+     * Splits generator which abstract dealing with ORC stripes and HDFS blocks
+     */
     static class SplitsGenerator {
         private final Path path;
         private final List<StripeInformation> stripes;
@@ -213,6 +381,9 @@ public class OrcInputFormatNew extends OrcInputFormat<OrcStruct> {
         }
     }
 
+    /**
+     * Structure holding usefull information about single ORC file
+     */
     static class OrcFileInfo {
         final List<StripeStatistics> stripe_stat;
         final List<StripeInformation> stripes;

@@ -16,6 +16,61 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class OrcRecordSchema {
+    private Field[] fields;
+
+    public OrcRecordSchema(Field[] fields) {
+        this.fields = fields;
+    }
+
+    private static Object OrcWritable2Java(Writable val, TypeDescription.Category cat) {
+        switch (cat) {
+            case INT:
+                return ((IntWritable) val).get();
+
+            case STRING:
+            case CHAR:
+            case VARCHAR:
+                return val.toString();
+
+            case LONG:
+                return ((LongWritable) val).get();
+
+            default:
+                throw new IllegalArgumentException("Unknown type " + cat.getName());
+        }
+    }
+
+    public static Row OrcStruct2SQLRow(OrcStruct st) {
+        int i = 0;
+        Object[] cols = new Object[st.getNumFields()];
+        List<TypeDescription> childs = st.getSchema().getChildren();
+
+        for (TypeDescription fld_descr : childs) {
+            cols[i] = OrcWritable2Java(st.getFieldValue(i), fld_descr.getCategory());
+            i++;
+        }
+
+        return RowFactory.create(cols);
+    }
+
+    public final TypeDescription GetORCSchema() {
+        TypeDescription schema = TypeDescription.createStruct();
+        for (Field desc : fields) {
+            schema.addField(desc.name, desc.orc_type);
+        }
+
+        return schema;
+    }
+
+    public final StructType GetSQLSchema() {
+        ArrayList<StructField> sql_fields = new ArrayList<>();
+        for (Field desc : fields) {
+            sql_fields.add(DataTypes.createStructField(desc.name, desc.sql_type, desc.nullable));
+        }
+
+        return DataTypes.createStructType(sql_fields);
+    }
+
     public static class Field {
         String name;
         DataType sql_type;
@@ -32,10 +87,13 @@ public class OrcRecordSchema {
         static private DataType getSQLDataTypeFor(TypeDescription orc_type) {
             TypeDescription.Category cat = orc_type.getCategory();
 
-            switch(cat) {
-                case INT: return DataTypes.IntegerType;
-                case LONG: return DataTypes.LongType;
-                case STRING: return DataTypes.StringType;
+            switch (cat) {
+                case INT:
+                    return DataTypes.IntegerType;
+                case LONG:
+                    return DataTypes.LongType;
+                case STRING:
+                    return DataTypes.StringType;
                 default:
                     throw new IllegalArgumentException("Unknown type " + cat.getName());
             }
@@ -48,60 +106,5 @@ public class OrcRecordSchema {
         static public Field MakeField(String name, TypeDescription orc_type) {
             return MakeField(name, orc_type, true);
         }
-    }
-
-    public static Object OrcWritable2Java(Writable val, TypeDescription.Category cat) {
-        switch(cat) {
-            case INT:
-                return ((IntWritable)val).get();
-
-            case STRING:
-            case CHAR:
-            case VARCHAR:
-                return val.toString();
-
-            case LONG:
-                return ((LongWritable)val).get();
-
-            default:
-                throw new IllegalArgumentException("Unknown type " + cat.getName());
-        }
-    }
-
-    private Field[] fields;
-
-    public OrcRecordSchema(Field[] fields) {
-        this.fields = fields;
-    }
-
-    public final TypeDescription GetORCSchema() {
-        TypeDescription schema = TypeDescription.createStruct();
-        for (Field desc: fields) {
-            schema.addField(desc.name, desc.orc_type);
-        }
-
-        return schema;
-    }
-
-    public final StructType GetSQLSchema() {
-        ArrayList<StructField> sql_fields = new ArrayList<>();
-        for (Field desc: fields) {
-            sql_fields.add(DataTypes.createStructField(desc.name, desc.sql_type, desc.nullable));
-        }
-
-        return DataTypes.createStructType(sql_fields);
-    }
-
-    public static Row OrcStruct2SQLRow(OrcStruct st) {
-        int i = 0;
-        Object[] cols = new Object[st.getNumFields()];
-        List<TypeDescription> childs = st.getSchema().getChildren();
-
-        for (TypeDescription fld_descr: childs) {
-            cols[i] = OrcWritable2Java(st.getFieldValue(i), fld_descr.getCategory());
-            i++;
-        }
-
-        return RowFactory.create(cols);
     }
 }

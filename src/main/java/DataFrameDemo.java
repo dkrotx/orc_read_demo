@@ -5,7 +5,6 @@ import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentFactory;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.orc.mapred.OrcStruct;
-import org.apache.orc.mapreduce.OrcInputFormat;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -31,7 +30,7 @@ public class DataFrameDemo {
         OrcInputFormatNew.addInputPath(job, new Path(path));
         OrcInputFormatNew.setSearchArgument(job.getConfiguration(),
                 SearchArgumentFactory.newBuilder()
-                        .equals("id", PredicateLeaf.Type.LONG, (long)id)
+                        .equals("id", PredicateLeaf.Type.LONG, (long) id)
                         .build(),
                 new String[]{null, "id", "name", "phone"});
 
@@ -45,12 +44,6 @@ public class DataFrameDemo {
         df.select(df.col("id"), df.col("name"))
                 .filter(df.col("id").equalTo(id))
                 .show();
-
-        try {
-            Thread.sleep(1000000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
     }
 
     public static void main(String[] args) throws IOException {
